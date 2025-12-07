@@ -18,6 +18,9 @@ import pyarrow.parquet as pq
 from pathlib import Path
 from datetime import datetime
 
+# Fields that contain dates in M/D/YYYY format
+DATE_FIELDS = {"FAILDATE", "RESDATE", "BRDATE", "PTRDATE"}
+
 # Directories
 PROJECT_ROOT = Path(__file__).parent
 DATA_DIR = PROJECT_ROOT / "data"
@@ -93,21 +96,25 @@ def build_schema_with_metadata(records: list, var_defs: dict) -> pa.Schema:
 
     fields = []
     for key in sorted(all_keys):
-        # Determine field type from data
-        sample_value = None
-        for record in records:
-            if key in record and record[key] is not None:
-                sample_value = record[key]
-                break
-
-        if isinstance(sample_value, bool):
-            pa_type = pa.bool_()
-        elif isinstance(sample_value, int):
-            pa_type = pa.int64()
-        elif isinstance(sample_value, float):
-            pa_type = pa.float64()
+        # Check if this is a known date field
+        if key in DATE_FIELDS:
+            pa_type = pa.date32()
         else:
-            pa_type = pa.string()
+            # Determine field type from data
+            sample_value = None
+            for record in records:
+                if key in record and record[key] is not None:
+                    sample_value = record[key]
+                    break
+
+            if isinstance(sample_value, bool):
+                pa_type = pa.bool_()
+            elif isinstance(sample_value, int):
+                pa_type = pa.int64()
+            elif isinstance(sample_value, float):
+                pa_type = pa.float64()
+            else:
+                pa_type = pa.string()
 
         # Build field metadata from YAML definitions
         metadata = {}
@@ -128,6 +135,50 @@ def build_schema_with_metadata(records: list, var_defs: dict) -> pa.Schema:
     return pa.schema(fields)
 
 
+def parse_date(value):
+    """Parse date string in M/D/YYYY format to date object."""
+    if value is None or value == "":
+        return None
+    try:
+        # Handle M/D/YYYY format (variable width month/day)
+        return datetime.strptime(value, "%m/%d/%Y").date()
+    except ValueError:
+        try:
+            # Try alternative formats
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+
+def coerce_value(value, pa_type):
+    """Coerce a value to match the expected PyArrow type."""
+    if value is None or value == "":
+        return None
+
+    if pa.types.is_date32(pa_type):
+        return parse_date(value)
+    elif pa.types.is_string(pa_type):
+        return str(value)
+    elif pa.types.is_int64(pa_type):
+        if isinstance(value, (int, float)):
+            return int(value)
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return None
+    elif pa.types.is_float64(pa_type):
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+    elif pa.types.is_boolean(pa_type):
+        return bool(value)
+
+    return value
+
+
 def save_parquet(records: list, filepath: Path, var_defs: dict) -> None:
     """Save data as parquet file with metadata."""
     if not records:
@@ -139,11 +190,13 @@ def save_parquet(records: list, filepath: Path, var_defs: dict) -> None:
     # Build schema with metadata
     schema = build_schema_with_metadata(records, var_defs)
 
-    # Convert records to columnar format
+    # Convert records to columnar format with type coercion
     columns = {field.name: [] for field in schema}
     for record in records:
         for field in schema:
-            columns[field.name].append(record.get(field.name))
+            raw_value = record.get(field.name)
+            coerced_value = coerce_value(raw_value, field.type)
+            columns[field.name].append(coerced_value)
 
     # Create table and write parquet
     table = pa.table(columns, schema=schema)

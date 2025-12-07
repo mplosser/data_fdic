@@ -27,6 +27,20 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### API Key Setup (Recommended)
+
+Register for a free API key at https://api.fdic.gov/banks/docs/ to avoid rate limiting.
+
+```bash
+# Set environment variable (recommended)
+set FDIC_API_KEY=your_api_key_here      # Windows CMD
+$env:FDIC_API_KEY="your_api_key_here"   # Windows PowerShell
+export FDIC_API_KEY=your_api_key_here   # macOS/Linux
+
+# Or pass directly to script
+python 01_download.py --api-key your_api_key_here
+```
+
 ### Download Data
 
 ```bash
@@ -69,7 +83,7 @@ python 04_cleanup.py --dry-run    # Preview without deleting
 ## Project Structure
 
 ```
-data_failures/
+data_fdic/
 ├── data/
 │   ├── raw/                  # Downloaded JSON and YAML files
 │   ├── processed/            # Parquet files with embedded metadata

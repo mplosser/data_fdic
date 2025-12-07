@@ -32,8 +32,11 @@ python -m venv venv
 venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 
+# API Key (recommended - avoids rate limiting)
+set FDIC_API_KEY=your_key_here  # Windows
+
 # Pipeline
-python 01_download.py              # Download data + YAML
+python 01_download.py              # Download data + YAML (uses FDIC_API_KEY env var)
 python 02_parse.py --force         # Parse to parquet
 python 03_summarize.py             # Verify results
 python 04_cleanup.py --raw         # Remove raw files (optional)

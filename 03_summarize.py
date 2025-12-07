@@ -73,15 +73,11 @@ def summarize_failures() -> None:
     if "FAILDATE" in df.columns:
         dates = df["FAILDATE"].dropna()
         if len(dates) > 0:
-            # Parse dates - they may be strings
-            try:
-                min_date = dates.min()
-                max_date = dates.max()
-                print(f"\nDate Range:")
-                print(f"  Earliest failure: {min_date}")
-                print(f"  Latest failure: {max_date}")
-            except Exception:
-                pass
+            min_date = dates.min()
+            max_date = dates.max()
+            print(f"\nDate Range:")
+            print(f"  Earliest failure: {min_date}")
+            print(f"  Latest failure: {max_date}")
 
     if "FAILYR" in df.columns:
         years = df["FAILYR"].dropna()

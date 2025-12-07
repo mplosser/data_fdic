@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(curl:*)",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(del:*)"
     ],
     "deny": [],
     "ask": []

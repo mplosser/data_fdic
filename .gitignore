@@ -6,6 +6,7 @@ data/processed/*.json
 data/processed/*.csv
 data/processed/*.parquet
 data/data_dictionary.csv
+api_key/*
 
 # Keep directory structure
 !data/raw/.gitkeep
