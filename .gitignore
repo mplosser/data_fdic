@@ -2,6 +2,8 @@
 data/raw/*.json
 data/raw/*.csv
 data/raw/*.yaml
+data/raw/*.csv.gz
+data/raw/structure/
 data/processed/*.json
 data/processed/*.csv
 data/processed/*.parquet

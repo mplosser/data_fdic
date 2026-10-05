@@ -19,7 +19,7 @@ RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 PROCESSED_DATA_DIR = PROJECT_ROOT / "data" / "processed"
 
 # File patterns to clean
-RAW_PATTERNS = ["*.json", "*.yaml"]
+RAW_PATTERNS = ["*.json", "*.yaml", "*.csv.gz", "structure/*.csv.gz"]
 PROCESSED_PATTERNS = ["*.parquet", "*.json", "*.csv"]
 
 

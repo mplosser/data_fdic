@@ -7,8 +7,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 FDIC Data Pipeline - automates downloading, processing, and summarizing data from the FDIC API (https://api.fdic.gov/banks/docs/#/).
 
 **Target API Endpoints:**
-- `/banks/institutions` - Bank structure data
+- `/banks/institutions` - Bank structure data (CURRENT record only -- never merge it onto history)
 - `/banks/failures` - Bank failure data
+- `/banks/financials` - structure fields AS OF each quarter, 1984Q1+ ->
+  `structure_quarterly.parquet` (keys CERT + REPDTE; RSSDID for Call Report merges)
+- `/banks/history` - dated institution-level structure-change events -> `history_events.parquet`
+
+Rule: attach attributes to a dated panel only from a source valid on that date
+(`structure_quarterly` by quarter, `history_events` by EFFDATE), never from `institutions`.
 
 Each endpoint has an associated .yaml file with variable definitions that should be incorporated into processed data (similar to STATA variable labels).
 

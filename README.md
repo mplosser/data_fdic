@@ -6,8 +6,10 @@ Automated pipeline for downloading, processing, and summarizing bank data from t
 
 | Endpoint | Description | Data Range |
 |----------|-------------|------------|
-| `/banks/institutions` | Bank structure and demographic data | Current |
+| `/banks/institutions` | Bank structure and demographic data | Current record only |
 | `/banks/failures` | Historical bank failure records | 1934-present |
+| `/banks/financials` (structure fields) | Structure **as of each quarter**: name, class, regulator, top holder, ... | 1984Q1-present |
+| `/banks/history` | Dated structure-change events (institution level) | 1800s-present |
 
 ## Quick Start
 
@@ -49,7 +51,12 @@ python 01_download.py
 
 Downloads:
 - Bank failures and institutions data as JSON
-- YAML variable definition files (`failure_properties.yaml`, `institution_properties.yaml`)
+- Quarterly structure (one gzipped CSV per quarter in `data/raw/structure/`) and
+  structure-change history (gzipped CSV)
+- YAML variable definition files for each endpoint
+
+`--only failures institutions structure history` picks datasets; `--force` re-fetches
+every structure quarter.
 
 ### Parse Data
 
@@ -80,12 +87,54 @@ python 04_cleanup.py --all        # Remove all data files
 python 04_cleanup.py --dry-run    # Preview without deleting
 ```
 
+## Structure as of each quarter
+
+The `institutions` file holds each bank's **current** record only: a bank renamed or
+re-chartered after 2015 shows its new name and class throughout its history. For history,
+use the two dated datasets:
+
+- **`structure_quarterly.parquet`** — one row per institution per quarter, 1984Q1 to the
+  latest published quarter, taken from the `/financials` endpoint (Statistics on Depository
+  Institutions). Every field is the value **in force that quarter**: name, city/state,
+  institution class (`BKCLASS`, `CLCODE`), charter agent, primary regulator, Fed district,
+  insurer, trust powers, mutual/stock, Subchapter S, asset-concentration group (`SPECGRP`),
+  regulatory top holder (`RSSDHCR`, `NAMEHCR`), foreign-bank flags (`IBA`, `OI`,
+  `FORCHRTR`), office counts, and the date of the latest structure change in force
+  (`EFFDATE`). `ESTYMD`, `ENDEFYMD` and `INSDATE` are institution-level dates, the same in
+  every quarter. Keys: `CERT` + `REPDTE`; `RSSDID` is the Federal Reserve ID the Call
+  Report files under. It covers every Call Report filer, including uninsured trust
+  companies (`BKCLASS` = NC). Example, cert 24045:
+
+  | REPDTE | NAME | BKCLASS | REGAGNT | NAMEHCR |
+  |---|---|---|---|---|
+  | 1999-06-30 | FIRST PROFESSIONAL BANK NA | N | OCC | PROFESSIONAL BCORP INC |
+  | 2021-12-31 | PACIFIC WESTERN BANK | NM | FDIC | PACWEST BCORP |
+  | 2024-12-31 | BANC OF CALIFORNIA | SM | FED | BANC OF CALIFORNIA INC |
+
+- **`history_events.parquet`** — institution-level structure-change events from the
+  `/history` endpoint (`ORG_ROLE_CDE` = FI; branch events excluded): effective date
+  (`EFFDATE`), event (`CHANGECODE`, `CHANGECODE_DESC`), and the attributes before
+  (`FRM_*`) and after (class, name, charter agent, regulator, trust powers, ...). Use it to
+  date a change exactly; the quarterly panel shows the state at each quarter end.
+
+Downloads are incremental: each quarter is saved once under `data/raw/structure/`, and the
+latest four quarters are re-fetched every run so late amendments land
+(`--force` re-fetches everything). History is fetched year by year and checked against the
+API's event count.
+
+```bash
+python 01_download.py --only structure history   # just these two
+python 02_parse.py --force
+python 03_summarize.py --fields structure
+```
+
 ## Project Structure
 
 ```
 data_fdic/
 ├── data/
-│   ├── raw/                  # Downloaded JSON and YAML files
+│   ├── raw/                  # Downloaded JSON, CSV and YAML files
+│   │   └── structure/        # One CSV per quarter (structure as of that quarter)
 │   ├── processed/            # Parquet files with embedded metadata
 │   └── data_dictionary.csv   # Variable definitions from YAML
 ├── 01_download.py

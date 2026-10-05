@@ -13,10 +13,11 @@ import argparse
 import csv
 import json
 import yaml
+import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pathlib import Path
-from datetime import datetime
+from datetime import date, datetime
 
 # Fields that contain dates in M/D/YYYY format
 DATE_FIELDS = {"FAILDATE", "RESDATE", "BRDATE", "PTRDATE"}
@@ -31,7 +32,24 @@ PROCESSED_DATA_DIR = DATA_DIR / "processed"
 YAML_FILES = {
     "failures": "failure_properties.yaml",
     "institutions": "institution_properties.yaml",
+    "structure": "risview_properties.yaml",
+    "history": "history_properties.yaml",
 }
+
+STRUCTURE_DIR = RAW_DATA_DIR / "structure"
+STRUCTURE_OUT = "structure_quarterly.parquet"
+HISTORY_OUT = "history_events.parquet"
+
+# Quarterly structure: YYYYMMDD dates, integer codes/flags; everything else is text.
+STRUCTURE_DATES = ["REPDTE", "EFFDATE", "ESTYMD", "ENDEFYMD", "INSDATE"]
+STRUCTURE_INTS = [
+    "CERT", "RSSDID", "CLCODE", "FED", "FDICSUPV", "INSFDIC", "SPECGRP", "MUTUAL",
+    "SUBCHAPS", "SASSER", "CB", "DENOVO", "INSTCRCD", "RSSDHCR", "HCTMULT",
+    "IBA", "OI", "FORCHRTR", "OFFFOR", "OFFDOM", "FORMCFR", "FORM31", "UNINUM",
+]
+
+# Fields a dataset's dictionary rows are limited to (the full financials YAML has ~2,400).
+DICTIONARY_FIELDS = {}
 
 
 def get_latest_file(pattern: str) -> Path | None:
@@ -260,6 +278,101 @@ def parse_institutions(force: bool = False) -> None:
     save_parquet(flat_data, PROCESSED_DATA_DIR / f"institutions_{timestamp}.parquet", var_defs)
 
 
+def _ymd_dates(values: pd.Series) -> pd.Series:
+    """YYYYMMDD (or ISO yyyy-mm-dd...) text -> datetime.date; 9999-12-31 ("open") is kept."""
+    text = values.astype("string").str.replace("-", "", regex=False).str[:8]
+    bad = text.notna() & ~text.str.fullmatch(r"\d{8}").fillna(False)
+    if bad.any():
+        raise ValueError(f"{values.name}: unparseable dates, e.g. {values[bad].iloc[0]!r}")
+    return text.map(lambda v: None if pd.isna(v) else date(int(v[:4]), int(v[4:6]), int(v[6:])),
+                    na_action="ignore")
+
+
+def _strict_ints(values: pd.Series) -> pd.Series:
+    """Integer codes; fails on any non-numeric text rather than blanking it."""
+    numbers = pd.to_numeric(values, errors="raise")
+    if (numbers.dropna() % 1 != 0).any():
+        raise ValueError(f"{values.name}: non-integer values")
+    return numbers.astype("Int64")
+
+
+def write_with_metadata(frame: pd.DataFrame, filepath: Path, var_defs: dict) -> None:
+    """Write a DataFrame to parquet, attaching each field's YAML title/description."""
+    table = pa.Table.from_pandas(frame, preserve_index=False)
+    fields = []
+    for field in table.schema:
+        info = var_defs.get(field.name, {})
+        meta = {k.encode(): str(info[k]).encode("utf-8") for k in ("title", "description")
+                if info.get(k)}
+        fields.append(field.with_metadata(meta or None))
+    pq.write_table(table.cast(pa.schema(fields, metadata=table.schema.metadata)), filepath)
+    print(f"  Saved: {filepath}")
+    print(f"  Records: {len(frame):,}, Fields: {len(fields)}")
+
+
+def parse_structure(force: bool = False) -> None:
+    """Quarterly structure panel (one row per institution per quarter, as of that quarter)."""
+    print("\nParsing quarterly structure data...")
+    out = PROCESSED_DATA_DIR / STRUCTURE_OUT
+    if not force and out.exists():
+        print("  Output already exists. Use --force to overwrite.")
+        return
+    files = sorted(STRUCTURE_DIR.glob("structure_*.csv.gz"))
+    if not files:
+        print("  No structure data found in data/raw/structure/")
+        return
+    print(f"  Reading {len(files)} quarter files")
+    frame = pd.concat([pd.read_csv(f, dtype=str, keep_default_na=False, na_values=[""])
+                       for f in files], ignore_index=True)
+    for col in STRUCTURE_DATES:
+        frame[col] = _ymd_dates(frame[col])
+    for col in STRUCTURE_INTS:
+        frame[col] = _strict_ints(frame[col])
+    # ZIP arrives as a JSON number: "4401" or "4401.0" -> "04401"
+    frame["ZIP"] = frame["ZIP"].str.replace(r"\.0$", "", regex=True).str.zfill(5)
+    frame = frame.sort_values(["REPDTE", "CERT"]).reset_index(drop=True)
+
+    if frame.duplicated(["CERT", "REPDTE"]).any():
+        raise ValueError("structure: duplicate (CERT, REPDTE) rows")
+    keyed = frame[frame["RSSDID"].fillna(0) > 0]
+    dup_rssd = keyed.duplicated(["RSSDID", "REPDTE"], keep=False)
+    print(f"  Quarters: {frame['REPDTE'].min()} to {frame['REPDTE'].max()} "
+          f"({frame['REPDTE'].nunique()})")
+    print(f"  Rows without an RSSD ID: {len(frame) - len(keyed):,}; "
+          f"(RSSDID, REPDTE) shared by more than one cert: {int(dup_rssd.sum()):,}")
+    DICTIONARY_FIELDS["structure"] = set(frame.columns)
+    write_with_metadata(frame, out, load_variable_definitions(RAW_DATA_DIR / YAML_FILES["structure"]))
+
+
+def parse_history(force: bool = False) -> None:
+    """Institution-level structure-change events (EFFDATE, before/after attributes)."""
+    print("\nParsing structure-change history...")
+    out = PROCESSED_DATA_DIR / HISTORY_OUT
+    if not force and out.exists():
+        print("  Output already exists. Use --force to overwrite.")
+        return
+    latest = get_latest_file("history_*.csv.gz")
+    if not latest:
+        print("  No history data found in data/raw/")
+        return
+    print(f"  Reading: {latest}")
+    frame = pd.read_csv(latest, dtype=str, keep_default_na=False, na_values=[""])
+    var_defs = load_variable_definitions(RAW_DATA_DIR / YAML_FILES["history"])
+    for col in frame.columns:
+        kind = var_defs.get(col, {}).get("type")
+        if col.endswith("DATE") or col == "FI_EFFDATE":
+            frame[col] = _ymd_dates(frame[col])
+        elif kind in ("number", "integer"):
+            numbers = pd.to_numeric(frame[col], errors="raise")
+            frame[col] = numbers.astype("Int64") if (numbers.dropna() % 1 == 0).all() else numbers
+    frame = frame.sort_values(["CERT", "EFFDATE", "ID"], key=None).reset_index(drop=True)
+    if frame["ID"].duplicated().any():
+        raise ValueError("history: duplicate event IDs")
+    print(f"  Events: {len(frame):,}; institutions (CERT): {frame['CERT'].nunique():,}")
+    DICTIONARY_FIELDS["history"] = set(frame.columns)
+    write_with_metadata(frame, out, var_defs)
+
+
 def create_data_dictionary() -> None:
     """Create data_dictionary.csv from YAML definition files."""
     print("\nCreating data dictionary...")
@@ -270,13 +383,16 @@ def create_data_dictionary() -> None:
         yaml_path = RAW_DATA_DIR / yaml_file
         var_defs = load_variable_definitions(yaml_path)
 
+        keep = DICTIONARY_FIELDS.get(dataset)
         for field_name, field_info in sorted(var_defs.items()):
+            if keep is not None and field_name not in keep:
+                continue
             row = {
                 "dataset": dataset,
                 "field": field_name,
                 "type": field_info.get("type", ""),
-                "title": field_info.get("title", ""),
-                "description": field_info.get("description", "").replace("\n", " ").strip(),
+                "title": field_info.get("title") or "",
+                "description": (field_info.get("description") or "").replace("\n", " ").strip(),
                 "enum": "|".join(field_info.get("enum", [])) if "enum" in field_info else "",
                 "unit": field_info.get("x-number-unit", ""),
             }
@@ -318,6 +434,11 @@ def main():
 
     parse_failures(force=args.force)
     parse_institutions(force=args.force)
+    parse_structure(force=args.force)
+    parse_history(force=args.force)
+    for dataset, name in (("structure", STRUCTURE_OUT), ("history", HISTORY_OUT)):
+        if dataset not in DICTIONARY_FIELDS and (PROCESSED_DATA_DIR / name).exists():
+            DICTIONARY_FIELDS[dataset] = set(pq.read_schema(PROCESSED_DATA_DIR / name).names)
     create_data_dictionary()
 
     print("\nParsing complete!")

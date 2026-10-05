@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import pandas as pd
 import pyarrow.parquet as pq
 from pathlib import Path
 from datetime import datetime
@@ -135,6 +136,28 @@ def summarize_institutions() -> None:
             print(f"  {bkclass}: {count:,}")
 
 
+def summarize_structure() -> None:
+    """Summarize the quarterly structure panel."""
+    print("\n" + "-" * 60)
+    print("QUARTERLY STRUCTURE (as of each quarter)")
+    print("-" * 60)
+
+    filepath = PROCESSED_DATA_DIR / "structure_quarterly.parquet"
+    if not filepath.exists():
+        print("  No structure data found")
+        return
+
+    df = pd.read_parquet(filepath, columns=["REPDTE", "CERT", "RSSDID", "BKCLASS"])
+    print(f"\nFile: {filepath.name}")
+    print(f"Rows: {len(df):,}  Institutions (CERT): {df['CERT'].nunique():,}")
+    print(f"Quarters: {df['REPDTE'].min()} to {df['REPDTE'].max()} ({df['REPDTE'].nunique()})")
+    print(f"Rows with an RSSD ID: {(df['RSSDID'].fillna(0) > 0).mean():.1%}")
+    latest = df[df["REPDTE"] == df["REPDTE"].max()]
+    print(f"\nInstitution classes, latest quarter:")
+    for bkclass, count in latest["BKCLASS"].value_counts().items():
+        print(f"  {bkclass}: {count:,}")
+
+
 def list_fields(dataset: str) -> None:
     """List all fields with their metadata."""
     pattern = f"{dataset}_*.parquet"
@@ -164,7 +187,7 @@ def main():
     )
     parser.add_argument(
         "--fields",
-        choices=["failures", "institutions"],
+        choices=["failures", "institutions", "structure", "history"],
         help="List all fields for a dataset"
     )
     args = parser.parse_args()
@@ -178,6 +201,7 @@ def main():
     else:
         summarize_failures()
         summarize_institutions()
+        summarize_structure()
 
     print("\n" + "=" * 60)
     print("Summary complete!")
